@@ -20,7 +20,7 @@ FILE_IDS = {
     "y_cnn.npy":      "1IEqzY6WYceUNzIcrfYT058Fs1ibNPx-h",
 }
 
-def download(role="all"):
+def download(role="all", verify=True):
     if role not in ROLES:
         print(f"Unknown role. Choose from: {list(ROLES.keys())}")
         return
@@ -42,7 +42,8 @@ def download(role="all"):
         gdown.download(
             f"https://drive.google.com/uc?id={FILE_IDS[filename]}",
             output=out_path,
-            quiet=False
+            quiet=False,
+            verify=verify,
         )
 
     print("\nDone! Files saved to data/processed/")
@@ -60,5 +61,10 @@ if __name__ == "__main__":
             "  all      → everything              (~848 MB)\n"
         )
     )
+    parser.add_argument(
+        "--no-ssl-verify",
+        action="store_true",
+        help="Bypass SSL certificate verification (workaround for strict corporate proxies).",
+    )
     args = parser.parse_args()
-    download(args.role)
+    download(args.role, verify=not args.no_ssl_verify)
