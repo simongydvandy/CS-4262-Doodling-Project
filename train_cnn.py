@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import os
 import random
 from dataclasses import dataclass
@@ -117,7 +118,15 @@ def load_label_names(path: str, num_classes: int) -> List[str]:
 
 
 def ensure_nchw(images: np.ndarray) -> np.ndarray:
-    if images.ndim == 3:
+    if images.ndim == 2:
+        side = int(math.isqrt(images.shape[1]))
+        if side * side != images.shape[1]:
+            raise ValueError(
+                "Expected flattened square images for 2D input arrays; "
+                f"got shape {images.shape}."
+            )
+        images = images.reshape(images.shape[0], 1, side, side)
+    elif images.ndim == 3:
         images = images[:, None, :, :]
     elif images.ndim == 4 and images.shape[-1] == 1:
         images = np.transpose(images, (0, 3, 1, 2))
