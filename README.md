@@ -13,7 +13,9 @@ This project uses [uv](https://github.com/astral-sh/uv) to manage dependencies r
    ```bash
    uv sync
    ```
-   *This single command reads `uv.lock`, creates a `.venv` virtual environment, and identically strictly installs Jupyter, numpy, scikit-learn, etc.*
+   *This single command reads `uv.lock`, creates a `.venv` virtual environment, and identically strictly installs Jupyter, numpy, scikit-learn, PyTorch, etc.*
+
+   `.venv` is intended to be managed by `uv`. Do not create or update it manually with `python -m venv` / `pip install` if you want reproducible results.
 
 3. **Run your code**:
    Prefix commands with `uv run` to automatically run code inside the isolated environment.
