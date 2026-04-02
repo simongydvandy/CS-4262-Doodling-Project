@@ -6,18 +6,18 @@ This file records a small smoke test run so collaborators can quickly see the ba
 
 Feature engineering:
 ```bash
-python extract_features.py --limit 10000
+python scripts/extract_features.py --limit 10000
 ```
 
 Baseline training:
 ```bash
-python train_baseline.py --categories 10
+python scripts/train_baseline.py --categories 10
 ```
 
 Notes / defaults used by the scripts:
-- Only `recognized=true` records are used in `extract_features.py` (unless `--include-unrecognized` is passed).
-- `extract_features.py` outputs an 18-dimensional feature vector per sample (10 numeric/geometric features + an 8-bin direction histogram).
-- `train_baseline.py` uses:
+- Only `recognized=true` records are used in `scripts/extract_features.py` (unless `--include-unrecognized` is passed).
+- `scripts/extract_features.py` outputs an 18-dimensional feature vector per sample (10 numeric/geometric features + an 8-bin direction histogram).
+- `scripts/train_baseline.py` uses:
   - `--test-size 0.2` (default)
   - `--random-seed 42` (default)
   - `stratify=y` when possible
@@ -62,5 +62,4 @@ Test set size (after filtering to labels `< 10`): `58` samples across `10` class
 
 ## Where the confusion matrices are saved
 
-When you run `train_baseline.py`, it writes confusion matrices to the local `results/` directory (PNG + NPY). Those `results/` artifacts are intentionally not committed to the repo.
-
+When you run `scripts/train_baseline.py`, it writes confusion matrices to the local `results/` directory (PNG + NPY). Those `results/` artifacts are intentionally not committed to the repo.

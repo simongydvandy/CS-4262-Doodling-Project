@@ -1,6 +1,14 @@
 # CS-4262-Doodling-Project
 We will build a “Pictionary” classifier that guesses the object category of a sketch. The main learning goal is to compare classic course models (logistic regression, SVM, random forests) on engineered stroke features versus a CNN on rasterized sketches and quantify how much the CNN helps. Dataset: https://quickdraw.withgoogle.com/data
 
+## Repo Layout
+
+- `scripts/` - executable training, download, and feature-extraction scripts
+- `docs/` - milestone-style notes, runbooks, and experiment documentation
+- `notebooks/` - exploratory and Colab notebooks
+- `data/` - local downloaded/processed data (ignored by git)
+- `results/` - local metrics, checkpoints, and plots (ignored by git)
+
 ## Getting Started (Environment Setup)
 
 This project uses [uv](https://github.com/astral-sh/uv) to manage dependencies reliably.
@@ -30,15 +38,15 @@ This project uses [uv](https://github.com/astral-sh/uv) to manage dependencies r
 ### Run the download script
 ```bash
 # For CNN models (X_cnn.npy, y_cnn.npy — ~521 MB)
-uv run python download_data.py --role cnn
+uv run python scripts/download_data.py --role cnn
 
 # For baseline models (strokes.ndjson — ~327 MB)
-uv run python download_data.py --role baseline
+uv run python scripts/download_data.py --role baseline
 # If Google Drive download fails with SSL/certificate verification:
-# uv run python download_data.py --role baseline --no-ssl-verify
+# uv run python scripts/download_data.py --role baseline --no-ssl-verify
 
 # For everything (~848 MB)
-uv run python download_data.py --role all
+uv run python scripts/download_data.py --role all
 ```
 
 Files will be saved to `data/processed/`.
@@ -56,10 +64,10 @@ Use the provided scripts below:
 ### Step 1 — Build `X_features.npy` (and labels)
 ```bash
 # Full run
-uv run python extract_features.py
+uv run python scripts/extract_features.py
 
 # Quick smoke test
-uv run python extract_features.py --limit 10000
+uv run python scripts/extract_features.py --limit 10000
 ```
 
 This reads `data/processed/strokes.ndjson` and writes:
@@ -71,10 +79,10 @@ This reads `data/processed/strokes.ndjson` and writes:
 ### Step 2 — Train baseline classifiers
 ```bash
 # Fast test on the first K categories (labels 0..K-1)
-uv run python train_baseline.py --categories 10
+uv run python scripts/train_baseline.py --categories 10
 
 # Full run (690k samples)
-uv run python train_baseline.py
+uv run python scripts/train_baseline.py
 ```
 
 This trains:
@@ -101,10 +109,10 @@ If you are running in Google Colab, PyTorch is usually preinstalled already.
 ### Step 2 - Train the CNN
 ```bash
 # Quick smoke test on 10 categories
-uv run python train_cnn.py --categories 10 --limit 10000 --epochs 5
+uv run python scripts/train_cnn.py --categories 10 --limit 10000 --epochs 5
 
 # Full run
-uv run python train_cnn.py --epochs 15 --batch-size 256
+uv run python scripts/train_cnn.py --epochs 15 --batch-size 256
 ```
 
 By default, the script:
@@ -126,7 +134,7 @@ The CNN script writes the following files to `results/`:
 
 Useful knobs for experiments:
 ```bash
-uv run python train_cnn.py \
+uv run python scripts/train_cnn.py \
   --batch-size 512 \
   --learning-rate 5e-4 \
   --dropout 0.4 \
@@ -136,3 +144,7 @@ uv run python train_cnn.py \
 ```
 
 This makes it easy to run one stable baseline in the repo while trying variants in Colab.
+
+Helpful references:
+- `docs/CNN_COLAB_RUNBOOK.md`
+- `notebooks/cnn_colab_runner.ipynb`
