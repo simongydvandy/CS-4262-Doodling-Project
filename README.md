@@ -81,3 +81,56 @@ This trains:
 - Linear SVM
 
 It saves metrics and confusion matrix plots to `results/`.
+
+## CNN training on rasterized sketches
+
+The repo also includes a PyTorch CNN baseline for the rasterized QuickDraw images (`X_cnn.npy`, `y_cnn.npy`).
+This is meant to support the project comparison between classical engineered-feature models and a learned image model.
+
+### Step 1 - Install PyTorch
+
+If you are running locally:
+```bash
+uv sync
+```
+
+If you are running in Google Colab, PyTorch is usually preinstalled already.
+
+### Step 2 - Train the CNN
+```bash
+# Quick smoke test on 10 categories
+uv run python train_cnn.py --categories 10 --limit 10000 --epochs 5
+
+# Full run
+uv run python train_cnn.py --epochs 15 --batch-size 256
+```
+
+By default, the script:
+- loads `data/processed/X_cnn.npy` and `data/processed/y_cnn.npy`
+- normalizes images to `[0, 1]`
+- creates stratified train/validation/test splits
+- trains a LeNet-style CNN
+- selects the best checkpoint by validation macro-F1
+
+### Step 3 - Review outputs
+
+The CNN script writes the following files to `results/`:
+- `cnn_best.pt` - best model checkpoint
+- `cnn_metrics.json` - summary metrics
+- `cnn_classification_report.json` - per-class precision/recall/F1
+- `cnn_confusion_matrix.npy` and `cnn_confusion_matrix.png`
+- `cnn_history.json` - epoch-by-epoch metrics
+- `cnn_training_curves.png`
+
+Useful knobs for experiments:
+```bash
+uv run python train_cnn.py \
+  --batch-size 512 \
+  --learning-rate 5e-4 \
+  --dropout 0.4 \
+  --hidden-dim 256 \
+  --conv-channels 32 64 \
+  --class-weighting
+```
+
+This makes it easy to run one stable baseline in the repo while trying variants in Colab.
