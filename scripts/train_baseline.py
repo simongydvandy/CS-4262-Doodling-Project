@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
+import joblib
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -355,6 +356,15 @@ def main() -> None:
         label_names=label_names,
         results_dir=args.results_dir,
     )
+
+    # ── save fitted pipelines for demo ───────────────────────────────
+    models_dir = os.path.join(os.path.dirname(args.results_dir), "models")
+    os.makedirs(models_dir, exist_ok=True)
+
+    joblib.dump(fitted_lr_l2, os.path.join(models_dir, "lr_l2_pipeline.pkl"))
+    joblib.dump(fitted_lr_l1, os.path.join(models_dir, "lr_l1_pipeline.pkl"))
+    joblib.dump(fitted_svm,   os.path.join(models_dir, "svm_linear_pipeline.pkl"))
+    print(f"\nPipelines saved to: {models_dir}")
 
     # final summary table
     all_metrics = [metrics_lr_l2, metrics_lr_l1, metrics_svm]
