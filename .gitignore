@@ -13,3 +13,5 @@ venv.bak/
 # Data and results
 data/
 results/
+
+.DS_Store
