@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import threading
 import time
 import warnings
 from typing import Any, Dict, List, Tuple
@@ -48,6 +49,8 @@ def _plot_confusion_matrix(
     n = cm.shape[0]
     fig_w = min(18, max(6, n * 0.35))
     fig_h = min(18, max(6, n * 0.35))
+    # lower DPI for large matrices — labels are hidden anyway above 50 classes
+    dpi = 100 if n > max_tick_labels else 200
     plt.figure(figsize=(fig_w, fig_h))
     plt.imshow(cm, interpolation="nearest", cmap="Blues")
     plt.title("Confusion matrix")
@@ -64,8 +67,18 @@ def _plot_confusion_matrix(
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
+    plt.savefig(out_path, dpi=dpi)
     plt.close()
+
+
+# ── heartbeat ──────────────────────────────────────────────────────────────────
+
+def _training_heartbeat(model_name: str, stop_event: threading.Event, interval: int = 60):
+    """Prints elapsed time every `interval` seconds while training is running."""
+    start = time.time()
+    while not stop_event.wait(interval):
+        elapsed = time.time() - start
+        print(f"  [{model_name}] still training... {elapsed/60:.1f} min elapsed")
 
 
 # ── core evaluator ─────────────────────────────────────────────────────────────
@@ -80,19 +93,31 @@ def evaluate_and_save(
     y_test: np.ndarray,
     label_names: List[str],
     results_dir: str,
-) -> Tuple[Dict[str, Any], np.ndarray, Any]:    # FIX 2: added return type annotation
-    # FIX 2: time each model
+) -> Tuple[Dict[str, Any], np.ndarray, Any]:
     print(f"\nTraining {model_name}...")
     t0 = time.time()
+
+    # start heartbeat thread
+    stop_event = threading.Event()
+    heartbeat  = threading.Thread(
+        target=_training_heartbeat,
+        args=(model_name, stop_event, 60),
+        daemon=True,
+    )
+    heartbeat.start()
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ConvergenceWarning)
         model.fit(X_train, y_train)
 
+    # stop heartbeat
+    stop_event.set()
+    heartbeat.join()
+
     elapsed = time.time() - t0
     print(f"  Trained in {elapsed/60:.1f} min")
 
-    # FIX 3: check convergence using isinstance instead of hasattr
+    # convergence check
     clf = model.named_steps["clf"]
     if hasattr(clf, "n_iter_"):
         iters = clf.n_iter_
@@ -105,9 +130,9 @@ def evaluate_and_save(
         print(f"  Iterations: {iters} / {max_i} — {status}")
 
     y_pred = model.predict(X_test)
-    acc = float(accuracy_score(y_test, y_pred))
-    f1  = float(f1_score(y_test, y_pred, average="macro"))
-    cm  = confusion_matrix(y_test, y_pred, labels=list(range(len(label_names))))
+    acc    = float(accuracy_score(y_test, y_pred))
+    f1     = float(f1_score(y_test, y_pred, average="macro"))
+    cm     = confusion_matrix(y_test, y_pred, labels=list(range(len(label_names))))
 
     print(f"  Accuracy : {acc:.4f}")
     print(f"  Macro-F1 : {f1:.4f}")
@@ -129,7 +154,6 @@ def evaluate_and_save(
     np.save(cm_npy_path, cm)
     _plot_confusion_matrix(cm, label_names, cm_png_path)
 
-    # FIX 4: save per-class F1 report
     report = classification_report(
         y_test,
         y_pred,
@@ -143,7 +167,6 @@ def evaluate_and_save(
         report,
     )
 
-    # FIX 1: return the fitted model so caller can use it without retraining
     return metrics, cm, model
 
 
@@ -183,11 +206,10 @@ def main() -> None:
     parser.add_argument(
         "--features-dir",
         default="data/processed",
-        # FIX 8: document the Drive path requirement for Colab
         help=(
             "Directory with X_features.npy, y_features.npy, label_names.json, "
-            "feature_config.json. In Colab use the full Drive path, e.g. "
-            "/content/drive/MyDrive/quickdraw-classifier/data/processed"
+            "feature_config.json. In Colab use the full path, e.g. "
+            "/content/CS-4262-Doodling-Project/data/processed"
         ),
     )
     parser.add_argument(
@@ -203,8 +225,8 @@ def main() -> None:
         default="results",
         help=(
             "Where to write metrics, confusion matrices, and sparsity reports. "
-            "In Colab use the full Drive path, e.g. "
-            "/content/drive/MyDrive/quickdraw-classifier/results"
+            "In Colab use the full path, e.g. "
+            "/content/CS-4262-Doodling-Project/results"
         ),
     )
     args = parser.parse_args()
@@ -244,7 +266,7 @@ def main() -> None:
     else:
         feature_names = [f"feature_{i}" for i in range(X.shape[1])]
 
-    # FIX 5: raise error instead of silently falling back on mismatch
+    # raise error instead of silently falling back on mismatch
     if len(feature_names) != X.shape[1]:
         raise ValueError(
             f"feature_config.json has {len(feature_names)} feature names "
@@ -275,12 +297,10 @@ def main() -> None:
         ("clf", LogisticRegression(
             penalty="l2",
             solver="lbfgs",
-            max_iter=5000,              # FIX 6: bumped from 3000
+            max_iter=5000,
             n_jobs=-1,
-            multi_class="auto",
         )),
     ])
-    # FIX 4: capture returned model consistently
     metrics_lr_l2, _, fitted_lr_l2 = evaluate_and_save(
         model_name="lr_l2",
         model=lr_l2,
@@ -300,10 +320,8 @@ def main() -> None:
             n_jobs=-1,
             tol=1e-3,
             C=1.0,
-            multi_class="ovr",
         )),
     ])
-    # FIX 1: capture returned model — no second training needed
     metrics_lr_l1, _, fitted_lr_l1 = evaluate_and_save(
         model_name="lr_l1",
         model=lr_l1,
@@ -317,7 +335,6 @@ def main() -> None:
     coef     = fitted_lr_l1.named_steps["clf"].coef_
     sparsity = l1_sparsity_report(coef=coef, feature_names=feature_names)
     _save_json(os.path.join(args.results_dir, "lr_l1_sparsity.json"), sparsity)
-    # FIX 7: print selected features on one line instead of one per line
     print(f"\n  L1 selected {sparsity['num_selected_features']} / "
           f"{sparsity['feature_dim']} features: "
           f"{', '.join(sparsity['selected_feature_names'])}")
@@ -330,7 +347,6 @@ def main() -> None:
             max_iter=20000,
         )),
     ])
-    # FIX 5: capture returned model consistently
     metrics_svm, _, fitted_svm = evaluate_and_save(
         model_name="svm_linear",
         model=svm,
@@ -340,7 +356,7 @@ def main() -> None:
         results_dir=args.results_dir,
     )
 
-    # FIX 6: print final summary table instead of just "done"
+    # final summary table
     all_metrics = [metrics_lr_l2, metrics_lr_l1, metrics_svm]
     print("\n" + "=" * 57)
     print(f"{'Model':<15} {'Accuracy':>10} {'Macro-F1':>10} {'Time':>12}")
