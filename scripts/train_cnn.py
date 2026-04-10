@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from cnn_model import QuickDrawCNN
+from cnn_model import QuickDrawCNN, QuickDrawDeepCNN
 
 
 @dataclass
@@ -52,12 +52,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.3, help="Dropout rate in the classifier head.")
     parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension of the classifier head.")
     parser.add_argument(
+        "--model-type",
+        choices=["lenet", "deep"],
+        default="lenet",
+        help="CNN architecture to train. Use `deep` for the stronger batch-normalized 3-stage CNN.",
+    )
+    parser.add_argument(
         "--conv-channels",
         type=int,
-        nargs=2,
+        nargs="+",
         default=(32, 64),
-        metavar=("C1", "C2"),
-        help="Output channels for the two convolutional layers.",
+        metavar="C",
+        help="Convolution channel sizes. Use 2 values for `lenet` and 3 values for `deep`.",
     )
     parser.add_argument("--val-size", type=float, default=0.1, help="Validation fraction taken from the training split.")
     parser.add_argument("--test-size", type=float, default=0.2, help="Held-out test fraction.")
@@ -115,6 +121,33 @@ def load_label_names(path: str, num_classes: int) -> List[str]:
             if len(names) >= num_classes:
                 return names[:num_classes]
     return [f"label_{i}" for i in range(num_classes)]
+
+
+def resolve_conv_channels(model_type: str, channels: List[int]) -> Tuple[int, ...]:
+    conv_channels = tuple(int(c) for c in channels)
+    if any(c <= 0 for c in conv_channels):
+        raise ValueError(f"--conv-channels must all be positive, got {conv_channels}.")
+
+    if model_type == "lenet":
+        if len(conv_channels) != 2:
+            raise ValueError(
+                f"--model-type lenet expects exactly 2 channel values, got {conv_channels}."
+            )
+        return conv_channels
+
+    if model_type == "deep":
+        if len(conv_channels) == 2:
+            # Friendly fallback: widen the final stage automatically if only two
+            # values are provided so older command patterns still work.
+            c1, c2 = conv_channels
+            return (c1, c2, min(c2 * 2, 512))
+        if len(conv_channels) != 3:
+            raise ValueError(
+                f"--model-type deep expects 3 channel values, got {conv_channels}."
+            )
+        return conv_channels
+
+    raise ValueError(f"Unknown model_type={model_type!r}")
 
 
 def ensure_nchw(images: np.ndarray) -> np.ndarray:
@@ -358,6 +391,7 @@ def make_checkpoint(
     return {
         "model_state_dict": model.state_dict(),
         "model_config": {
+            "model_type": args.model_type,
             "num_classes": len(label_names),
             "input_size": input_size,
             "conv_channels": tuple(args.conv_channels),
@@ -403,6 +437,7 @@ def main() -> None:
         num_classes = args.categories
 
     label_names = load_label_names(args.label_names, num_classes)
+    conv_channels = resolve_conv_channels(args.model_type, args.conv_channels)
 
     train_loader = build_loader(
         split.X_train,
@@ -427,13 +462,22 @@ def main() -> None:
     )
 
     device = resolve_device(args.device)
-    model = QuickDrawCNN(
-        num_classes=num_classes,
-        input_size=input_size,
-        conv_channels=tuple(args.conv_channels),
-        hidden_dim=args.hidden_dim,
-        dropout=args.dropout,
-    ).to(device)
+    if args.model_type == "deep":
+        model = QuickDrawDeepCNN(
+            num_classes=num_classes,
+            input_size=input_size,
+            conv_channels=conv_channels,
+            hidden_dim=args.hidden_dim,
+            dropout=args.dropout,
+        ).to(device)
+    else:
+        model = QuickDrawCNN(
+            num_classes=num_classes,
+            input_size=input_size,
+            conv_channels=conv_channels,
+            hidden_dim=args.hidden_dim,
+            dropout=args.dropout,
+        ).to(device)
 
     class_weights = None
     if args.class_weighting:
