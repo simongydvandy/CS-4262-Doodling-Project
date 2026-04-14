@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from cnn_model import QuickDrawCNN, QuickDrawDeepCNN
+from cnn_model import QuickDrawCNN, QuickDrawDeepCNN, QuickDrawResNet
 
 
 @dataclass
@@ -53,9 +53,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension of the classifier head.")
     parser.add_argument(
         "--model-type",
-        choices=["lenet", "deep"],
+        choices=["lenet", "deep", "resnet"],
         default="lenet",
-        help="CNN architecture to train. Use `deep` for the stronger batch-normalized 3-stage CNN.",
+        help="CNN architecture to train. Use `deep` or `resnet` for stronger models.",
     )
     parser.add_argument(
         "--conv-channels",
@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=(32, 64),
         metavar="C",
-        help="Convolution channel sizes. Use 2 values for `lenet` and 3 values for `deep`.",
+        help="Convolution channel sizes. Use 2 values for `lenet` and 3 values for `deep`/`resnet`.",
     )
     parser.add_argument("--val-size", type=float, default=0.1, help="Validation fraction taken from the training split.")
     parser.add_argument("--test-size", type=float, default=0.2, help="Held-out test fraction.")
@@ -144,6 +144,16 @@ def resolve_conv_channels(model_type: str, channels: List[int]) -> Tuple[int, ..
         if len(conv_channels) != 3:
             raise ValueError(
                 f"--model-type deep expects 3 channel values, got {conv_channels}."
+            )
+        return conv_channels
+
+    if model_type == "resnet":
+        if len(conv_channels) == 2:
+            c1, c2 = conv_channels
+            return (c1, c2, min(c2 * 2, 512))
+        if len(conv_channels) != 3:
+            raise ValueError(
+                f"--model-type resnet expects 3 channel values, got {conv_channels}."
             )
         return conv_channels
 
@@ -464,6 +474,14 @@ def main() -> None:
     device = resolve_device(args.device)
     if args.model_type == "deep":
         model = QuickDrawDeepCNN(
+            num_classes=num_classes,
+            input_size=input_size,
+            conv_channels=conv_channels,
+            hidden_dim=args.hidden_dim,
+            dropout=args.dropout,
+        ).to(device)
+    elif args.model_type == "resnet":
+        model = QuickDrawResNet(
             num_classes=num_classes,
             input_size=input_size,
             conv_channels=conv_channels,

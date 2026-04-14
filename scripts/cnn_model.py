@@ -21,6 +21,61 @@ class ConvBlock(nn.Module):
         return self.block(x)
 
 
+class ResidualBlock(nn.Module):
+    """A basic ResNet-style block for sketch classification."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        stride: int = 1,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.dropout = nn.Dropout2d(p=dropout) if dropout > 0 else nn.Identity()
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels),
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.dropout(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = out + identity
+        out = self.relu(out)
+        return out
+
+
 class QuickDrawCNN(nn.Module):
     """A compact LeNet-style CNN for 28x28 grayscale QuickDraw images."""
 
@@ -121,4 +176,70 @@ class QuickDrawDeepCNN(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
+        return self.classifier(x)
+
+
+class QuickDrawResNet(nn.Module):
+    """
+    A small ResNet-style CNN for QuickDraw sketches.
+
+    Compared with the plain deep CNN, this architecture adds residual
+    connections so we can increase depth without making optimization as brittle.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        *,
+        input_size: int = 28,
+        conv_channels: tuple[int, ...] = (64, 128, 256),
+        hidden_dim: int = 512,
+        dropout: float = 0.35,
+    ) -> None:
+        super().__init__()
+        if input_size <= 0:
+            raise ValueError(f"input_size must be positive, got {input_size}.")
+        if len(conv_channels) != 3:
+            raise ValueError(
+                "QuickDrawResNet expects exactly 3 conv channel values, "
+                f"got {conv_channels}."
+            )
+
+        c1, c2, c3 = conv_channels
+        block_dropout = dropout * 0.15
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(1, c1, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(c1),
+            nn.ReLU(inplace=True),
+        )
+
+        self.stage1 = nn.Sequential(
+            ResidualBlock(c1, c1, stride=1, dropout=block_dropout),
+            ResidualBlock(c1, c1, stride=1, dropout=block_dropout),
+        )
+        self.stage2 = nn.Sequential(
+            ResidualBlock(c1, c2, stride=2, dropout=block_dropout),
+            ResidualBlock(c2, c2, stride=1, dropout=block_dropout),
+        )
+        self.stage3 = nn.Sequential(
+            ResidualBlock(c2, c3, stride=2, dropout=block_dropout),
+            ResidualBlock(c3, c3, stride=1, dropout=block_dropout),
+        )
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(c3, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.stem(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.pool(x)
         return self.classifier(x)
