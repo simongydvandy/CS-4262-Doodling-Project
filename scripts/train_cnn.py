@@ -14,6 +14,7 @@ os.environ.setdefault("MPLCONFIGDIR", os.path.join("/tmp", "matplotlib"))
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 from torch import Tensor, nn
@@ -51,6 +52,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Adam weight decay.")
     parser.add_argument("--dropout", type=float, default=0.3, help="Dropout rate in the classifier head.")
     parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension of the classifier head.")
+    parser.add_argument(
+        "--scheduler",
+        choices=["none", "plateau", "cosine"],
+        default="plateau",
+        help="Learning-rate scheduler to use after each epoch.",
+    )
+    parser.add_argument(
+        "--scheduler-patience",
+        type=int,
+        default=2,
+        help="Patience for ReduceLROnPlateau before lowering the learning rate.",
+    )
+    parser.add_argument(
+        "--scheduler-factor",
+        type=float,
+        default=0.5,
+        help="LR decay factor for ReduceLROnPlateau.",
+    )
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        help="Apply light sketch-friendly data augmentation during training.",
+    )
+    parser.add_argument(
+        "--max-rotation-deg",
+        type=float,
+        default=12.0,
+        help="Maximum absolute rotation used for training augmentation.",
+    )
+    parser.add_argument(
+        "--max-translation",
+        type=float,
+        default=0.10,
+        help="Maximum translation fraction used for training augmentation.",
+    )
+    parser.add_argument(
+        "--scale-jitter",
+        type=float,
+        default=0.10,
+        help="Uniform scale jitter used for training augmentation.",
+    )
+    parser.add_argument(
+        "--random-erase-prob",
+        type=float,
+        default=0.10,
+        help="Probability of masking a small random patch during training augmentation.",
+    )
     parser.add_argument(
         "--model-type",
         choices=["lenet", "deep", "resnet"],
@@ -269,21 +317,104 @@ def compute_class_weights(labels: np.ndarray, num_classes: int, device: torch.de
     return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
+def compute_topk_accuracies(logits: Tensor, targets: Tensor, ks: Tuple[int, ...] = (3, 5)) -> Dict[str, float]:
+    """Compute top-k accuracies from raw logits for the requested k values."""
+    num_classes = logits.size(1)
+    max_k = min(max(ks), num_classes)
+    topk = logits.topk(max_k, dim=1).indices
+    targets = targets.view(-1, 1)
+    metrics: Dict[str, float] = {}
+    for k in ks:
+        k_eff = min(k, num_classes)
+        correct = (topk[:, :k_eff] == targets).any(dim=1).float().mean().item()
+        metrics[f"top_{k}_accuracy"] = float(correct)
+    return metrics
+
+
+def apply_batch_augmentation(
+    xb: Tensor,
+    *,
+    max_rotation_deg: float,
+    max_translation: float,
+    scale_jitter: float,
+    random_erase_prob: float,
+) -> Tensor:
+    """
+    Apply light geometric perturbations that preserve sketch semantics.
+
+    We keep augmentation intentionally mild because aggressive transforms can
+    distort small 28x28 doodles more than they help.
+    """
+    batch_size = xb.size(0)
+    device = xb.device
+    dtype = xb.dtype
+
+    angles = torch.empty(batch_size, device=device, dtype=dtype).uniform_(
+        -max_rotation_deg, max_rotation_deg
+    ) * (math.pi / 180.0)
+    cos_a = torch.cos(angles)
+    sin_a = torch.sin(angles)
+
+    scale_low = max(0.7, 1.0 - scale_jitter)
+    scale_high = 1.0 + scale_jitter
+    scales = torch.empty(batch_size, device=device, dtype=dtype).uniform_(scale_low, scale_high)
+    tx = torch.empty(batch_size, device=device, dtype=dtype).uniform_(-max_translation, max_translation)
+    ty = torch.empty(batch_size, device=device, dtype=dtype).uniform_(-max_translation, max_translation)
+
+    theta = torch.zeros((batch_size, 2, 3), device=device, dtype=dtype)
+    theta[:, 0, 0] = cos_a / scales
+    theta[:, 0, 1] = -sin_a / scales
+    theta[:, 1, 0] = sin_a / scales
+    theta[:, 1, 1] = cos_a / scales
+    theta[:, 0, 2] = tx
+    theta[:, 1, 2] = ty
+
+    grid = F.affine_grid(theta, xb.size(), align_corners=False)
+    xb = F.grid_sample(xb, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+
+    if random_erase_prob > 0:
+        erase_mask = torch.rand(batch_size, device=device) < random_erase_prob
+        _, _, height, width = xb.shape
+        for idx in torch.nonzero(erase_mask, as_tuple=False).flatten().tolist():
+            erase_h = max(2, int(height * float(torch.empty(1).uniform_(0.12, 0.25).item())))
+            erase_w = max(2, int(width * float(torch.empty(1).uniform_(0.12, 0.25).item())))
+            top = int(torch.randint(0, max(height - erase_h + 1, 1), (1,), device=device).item())
+            left = int(torch.randint(0, max(width - erase_w + 1, 1), (1,), device=device).item())
+            xb[idx, :, top:top + erase_h, left:left + erase_w] = 0.0
+
+    return xb.clamp_(0.0, 1.0)
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    *,
+    augment: bool,
+    max_rotation_deg: float,
+    max_translation: float,
+    scale_jitter: float,
+    random_erase_prob: float,
 ) -> Dict[str, float]:
     model.train()
     total_loss = 0.0
     all_preds: List[np.ndarray] = []
     all_targets: List[np.ndarray] = []
+    all_logits: List[Tensor] = []
 
     for xb, yb in loader:
         xb = xb.to(device)
         yb = yb.to(device)
+        if augment:
+            xb = apply_batch_augmentation(
+                xb,
+                max_rotation_deg=max_rotation_deg,
+                max_translation=max_translation,
+                scale_jitter=scale_jitter,
+                random_erase_prob=random_erase_prob,
+            )
 
         optimizer.zero_grad(set_to_none=True)
         logits = model(xb)
@@ -294,14 +425,22 @@ def train_one_epoch(
         total_loss += loss.item() * xb.size(0)
         all_preds.append(logits.argmax(dim=1).detach().cpu().numpy())
         all_targets.append(yb.detach().cpu().numpy())
+        all_logits.append(logits.detach().cpu())
 
     preds = np.concatenate(all_preds)
     targets = np.concatenate(all_targets)
-    return {
+    logits_cpu = torch.cat(all_logits, dim=0)
+    topk_metrics = compute_topk_accuracies(
+        logits_cpu,
+        torch.from_numpy(targets.astype(np.int64, copy=False)),
+    )
+    metrics = {
         "loss": total_loss / len(loader.dataset),
         "accuracy": float(accuracy_score(targets, preds)),
         "macro_f1": float(f1_score(targets, preds, average="macro")),
     }
+    metrics.update(topk_metrics)
+    return metrics
 
 
 @torch.no_grad()
@@ -315,6 +454,7 @@ def evaluate(
     total_loss = 0.0
     all_preds: List[np.ndarray] = []
     all_targets: List[np.ndarray] = []
+    all_logits: List[Tensor] = []
 
     for xb, yb in loader:
         xb = xb.to(device)
@@ -325,20 +465,68 @@ def evaluate(
         total_loss += loss.item() * xb.size(0)
         all_preds.append(logits.argmax(dim=1).cpu().numpy())
         all_targets.append(yb.cpu().numpy())
+        all_logits.append(logits.cpu())
 
     preds = np.concatenate(all_preds)
     targets = np.concatenate(all_targets)
+    logits_cpu = torch.cat(all_logits, dim=0)
+    topk_metrics = compute_topk_accuracies(
+        logits_cpu,
+        torch.from_numpy(targets.astype(np.int64, copy=False)),
+    )
     metrics = {
         "loss": total_loss / len(loader.dataset),
         "accuracy": float(accuracy_score(targets, preds)),
         "macro_f1": float(f1_score(targets, preds, average="macro")),
     }
+    metrics.update(topk_metrics)
     return metrics, targets, preds
 
 
 def save_json(path: str, obj: Dict[str, Any]) -> None:
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
+
+
+def build_top_confusions(cm: np.ndarray, label_names: List[str], *, top_n: int = 10) -> List[Dict[str, Any]]:
+    """Return the most common off-diagonal confusion pairs for presentation use."""
+    confusions: List[Dict[str, Any]] = []
+    for true_idx in range(cm.shape[0]):
+        for pred_idx in range(cm.shape[1]):
+            if true_idx == pred_idx:
+                continue
+            count = int(cm[true_idx, pred_idx])
+            if count <= 0:
+                continue
+            confusions.append(
+                {
+                    "true_label": label_names[true_idx],
+                    "predicted_label": label_names[pred_idx],
+                    "count": count,
+                }
+            )
+    confusions.sort(key=lambda row: row["count"], reverse=True)
+    return confusions[:top_n]
+
+
+def build_worst_classes(report: Dict[str, Any], label_names: List[str], *, top_n: int = 10) -> List[Dict[str, Any]]:
+    """Return the weakest per-class metrics from the classification report."""
+    rows: List[Dict[str, Any]] = []
+    for label_name in label_names:
+        stats = report.get(label_name)
+        if not isinstance(stats, dict):
+            continue
+        rows.append(
+            {
+                "label": label_name,
+                "precision": float(stats.get("precision", 0.0)),
+                "recall": float(stats.get("recall", 0.0)),
+                "f1_score": float(stats.get("f1-score", 0.0)),
+                "support": int(stats.get("support", 0)),
+            }
+        )
+    rows.sort(key=lambda row: (row["f1_score"], row["recall"], row["precision"]))
+    return rows[:top_n]
 
 
 def plot_confusion_matrix(cm: np.ndarray, labels: List[str], out_path: str, *, max_tick_labels: int = 50) -> None:
@@ -506,6 +694,22 @@ def main() -> None:
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    if args.scheduler == "plateau":
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None
+        plateau_scheduler: Optional[torch.optim.lr_scheduler.ReduceLROnPlateau] = (
+            torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="max",
+                factor=args.scheduler_factor,
+                patience=args.scheduler_patience,
+            )
+        )
+    elif args.scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+        plateau_scheduler = None
+    else:
+        scheduler = None
+        plateau_scheduler = None
 
     history: List[Dict[str, float]] = []
     best_state = copy.deepcopy(model.state_dict())
@@ -514,7 +718,18 @@ def main() -> None:
     epochs_without_improvement = 0
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        train_metrics = train_one_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            augment=args.augment,
+            max_rotation_deg=args.max_rotation_deg,
+            max_translation=args.max_translation,
+            scale_jitter=args.scale_jitter,
+            random_erase_prob=args.random_erase_prob,
+        )
 
         if len(split.X_val) > 0:
             val_metrics, _, _ = evaluate(model, val_loader, criterion, device)
@@ -523,12 +738,17 @@ def main() -> None:
 
         history_row = {
             "epoch": epoch,
+            "learning_rate": float(optimizer.param_groups[0]["lr"]),
             "train_loss": train_metrics["loss"],
             "train_accuracy": train_metrics["accuracy"],
             "train_macro_f1": train_metrics["macro_f1"],
+            "train_top_3_accuracy": train_metrics["top_3_accuracy"],
+            "train_top_5_accuracy": train_metrics["top_5_accuracy"],
             "val_loss": val_metrics["loss"],
             "val_accuracy": val_metrics["accuracy"],
             "val_macro_f1": val_metrics["macro_f1"],
+            "val_top_3_accuracy": val_metrics["top_3_accuracy"],
+            "val_top_5_accuracy": val_metrics["top_5_accuracy"],
         }
         history.append(history_row)
 
@@ -571,10 +791,17 @@ def main() -> None:
 
         print(
             f"Epoch {epoch:02d}/{args.epochs} "
+            f"lr={optimizer.param_groups[0]['lr']:.6f} "
             f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
             f"val_loss={val_metrics['loss']:.4f} val_acc={val_metrics['accuracy']:.4f} "
+            f"val_top3={val_metrics['top_3_accuracy']:.4f} val_top5={val_metrics['top_5_accuracy']:.4f} "
             f"val_macro_f1={val_metrics['macro_f1']:.4f}"
         )
+
+        if plateau_scheduler is not None:
+            plateau_scheduler.step(val_metrics["macro_f1"])
+        elif scheduler is not None:
+            scheduler.step()
 
         if args.early_stopping > 0 and epochs_without_improvement >= args.early_stopping:
             print(f"Early stopping after {epoch} epochs without validation improvement.")
@@ -593,9 +820,12 @@ def main() -> None:
         output_dict=True,
         zero_division=0,
     )
+    top_confusions = build_top_confusions(cm, label_names)
+    worst_classes = build_worst_classes(report, label_names)
 
     metrics = {
         "model": "quickdraw_cnn",
+        "model_type": args.model_type,
         "device": str(device),
         "num_classes": num_classes,
         "num_train_samples": int(len(split.y_train)),
@@ -603,13 +833,59 @@ def main() -> None:
         "num_test_samples": int(len(split.y_test)),
         "best_epoch": best_epoch,
         "best_val_accuracy": float(best_val_metrics["accuracy"]),
+        "best_val_top_3_accuracy": float(best_val_metrics["top_3_accuracy"]),
+        "best_val_top_5_accuracy": float(best_val_metrics["top_5_accuracy"]),
         "best_val_macro_f1": float(best_val_metrics["macro_f1"]),
         "test_accuracy": float(test_metrics["accuracy"]),
+        "test_top_3_accuracy": float(test_metrics["top_3_accuracy"]),
+        "test_top_5_accuracy": float(test_metrics["top_5_accuracy"]),
         "test_macro_f1": float(test_metrics["macro_f1"]),
+        "training_config": {
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "dropout": args.dropout,
+            "hidden_dim": args.hidden_dim,
+            "conv_channels": list(conv_channels),
+            "scheduler": args.scheduler,
+            "scheduler_patience": args.scheduler_patience,
+            "scheduler_factor": args.scheduler_factor,
+            "augment": args.augment,
+            "max_rotation_deg": args.max_rotation_deg,
+            "max_translation": args.max_translation,
+            "scale_jitter": args.scale_jitter,
+            "random_erase_prob": args.random_erase_prob,
+            "class_weighting": args.class_weighting,
+            "random_seed": args.random_seed,
+        },
+    }
+    presentation_summary = {
+        "headline_metrics": {
+            "test_accuracy": float(test_metrics["accuracy"]),
+            "test_top_3_accuracy": float(test_metrics["top_3_accuracy"]),
+            "test_top_5_accuracy": float(test_metrics["top_5_accuracy"]),
+            "test_macro_f1": float(test_metrics["macro_f1"]),
+            "best_val_accuracy": float(best_val_metrics["accuracy"]),
+            "best_val_top_3_accuracy": float(best_val_metrics["top_3_accuracy"]),
+            "best_val_top_5_accuracy": float(best_val_metrics["top_5_accuracy"]),
+            "best_val_macro_f1": float(best_val_metrics["macro_f1"]),
+            "best_epoch": int(best_epoch),
+        },
+        "experiment_setup": metrics["training_config"],
+        "dataset_split": {
+            "num_classes": num_classes,
+            "num_train_samples": int(len(split.y_train)),
+            "num_val_samples": int(len(split.y_val)),
+            "num_test_samples": int(len(split.y_test)),
+        },
+        "worst_classes_by_f1": worst_classes,
+        "top_confusions": top_confusions,
     }
 
     save_json(os.path.join(args.results_dir, "cnn_metrics.json"), metrics)
     save_json(os.path.join(args.results_dir, "cnn_classification_report.json"), report)
+    save_json(os.path.join(args.results_dir, "cnn_presentation_summary.json"), presentation_summary)
     save_json(
         os.path.join(args.results_dir, "cnn_history.json"),
         {"history": history},
@@ -620,6 +896,8 @@ def main() -> None:
 
     print(f"Best epoch: {best_epoch}")
     print(f"Test accuracy: {test_metrics['accuracy']:.4f}")
+    print(f"Test top-3 accuracy: {test_metrics['top_3_accuracy']:.4f}")
+    print(f"Test top-5 accuracy: {test_metrics['top_5_accuracy']:.4f}")
     print(f"Test macro-F1: {test_metrics['macro_f1']:.4f}")
     print(f"Results written to: {args.results_dir}")
 
