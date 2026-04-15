@@ -1,3 +1,5 @@
+"""Build engineered stroke features from the QuickDraw NDJSON export."""
+
 import argparse
 import json
 import math
@@ -353,6 +355,7 @@ def load_features(
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Extract feature arrays and save them into the processed data directory."""
     parser = argparse.ArgumentParser(
         description="Extract 26 stroke features from strokes.ndjson."
     )

@@ -19,7 +19,7 @@ Train the CNN on the rasterized QuickDraw data, compare it against the existing 
 Use this first:
 
 ```bash
-python scripts/train_cnn.py --categories 10 --limit 10000 --epochs 5 --batch-size 256 --num-workers 0
+python scripts/train_sketch_cnn.py --categories 10 --limit 10000 --epochs 5 --batch-size 256 --num-workers 0
 ```
 
 Expected outcome:
@@ -30,13 +30,13 @@ Expected outcome:
 ## First full run
 
 ```bash
-python scripts/train_cnn.py --epochs 15 --batch-size 256 --num-workers 2
+python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256 --num-workers 2
 ```
 
 If classes seem imbalanced in the results, also try:
 
 ```bash
-python scripts/train_cnn.py --epochs 15 --batch-size 256 --class-weighting --num-workers 2
+python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256 --class-weighting --num-workers 2
 ```
 
 ## Suggested experiment grid
@@ -46,31 +46,31 @@ Try a few focused variants instead of too many random combinations.
 ### Baseline
 
 ```bash
-python scripts/train_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64
+python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64
 ```
 
 ### Variant A: lower learning rate
 
 ```bash
-python scripts/train_cnn.py --epochs 20 --batch-size 256 --learning-rate 5e-4 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64
+python scripts/train_sketch_cnn.py --epochs 20 --batch-size 256 --learning-rate 5e-4 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64
 ```
 
 ### Variant B: stronger regularization
 
 ```bash
-python scripts/train_cnn.py --epochs 20 --batch-size 256 --learning-rate 1e-3 --dropout 0.4 --hidden-dim 128 --conv-channels 32 64
+python scripts/train_sketch_cnn.py --epochs 20 --batch-size 256 --learning-rate 1e-3 --dropout 0.4 --hidden-dim 128 --conv-channels 32 64
 ```
 
 ### Variant C: wider model
 
 ```bash
-python scripts/train_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 256 --conv-channels 64 128
+python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 256 --conv-channels 64 128
 ```
 
 ### Variant D: class weighting
 
 ```bash
-python scripts/train_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64 --class-weighting
+python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256 --learning-rate 1e-3 --dropout 0.3 --hidden-dim 128 --conv-channels 32 64 --class-weighting
 ```
 
 ## What to save after each run

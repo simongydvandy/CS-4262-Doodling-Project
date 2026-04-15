@@ -1,3 +1,5 @@
+"""Train the classical baselines on engineered QuickDraw stroke features."""
+
 import argparse
 import json
 import os
@@ -5,6 +7,8 @@ import threading
 import time
 import warnings
 from typing import Any, Dict, List, Tuple
+
+os.environ.setdefault("MPLCONFIGDIR", os.path.join("/tmp", "matplotlib"))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +30,7 @@ import joblib
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _load_label_names(path: str) -> List[str]:
+    """Load label names from the saved processed-data metadata file."""
     with open(path, "r") as f:
         obj = json.load(f)
     if isinstance(obj, list):
@@ -36,6 +41,7 @@ def _load_label_names(path: str) -> List[str]:
 
 
 def _save_json(path: str, obj: Dict[str, Any]) -> None:
+    """Write a small JSON artifact to disk with stable formatting."""
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
 
@@ -47,6 +53,7 @@ def _plot_confusion_matrix(
     *,
     max_tick_labels: int = 50,
 ) -> None:
+    """Render and save a confusion matrix image for one trained classifier."""
     n = cm.shape[0]
     fig_w = min(18, max(6, n * 0.35))
     fig_h = min(18, max(6, n * 0.35))
@@ -95,6 +102,7 @@ def evaluate_and_save(
     label_names: List[str],
     results_dir: str,
 ) -> Tuple[Dict[str, Any], np.ndarray, Any]:
+    """Fit one baseline model, evaluate it, and save its artifacts."""
     print(f"\nTraining {model_name}...")
     t0 = time.time()
 
@@ -181,7 +189,7 @@ def l1_sparsity_report(
 ) -> Dict[str, Any]:
     """
     Summarize L1 sparsity. coef shape: (n_classes, n_features).
-    Covers all 26 features from the updated extract_features.py.
+    Covers all 26 features from the updated build_stroke_features.py.
     A feature is considered selected if any class has a nonzero coefficient for it.
     """
     nonzero = np.abs(coef) > eps
@@ -201,6 +209,7 @@ def l1_sparsity_report(
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Run the full classical-model training pipeline and save summaries."""
     parser = argparse.ArgumentParser(
         description="Train baseline models on X_features.npy."
     )
@@ -272,7 +281,7 @@ def main() -> None:
         raise ValueError(
             f"feature_config.json has {len(feature_names)} feature names "
             f"but X_features.npy has {X.shape[1]} columns. "
-            f"Re-run extract_features.py to regenerate feature_config.json."
+            f"Re-run build_stroke_features.py to regenerate feature_config.json."
         )
 
     # stratified split

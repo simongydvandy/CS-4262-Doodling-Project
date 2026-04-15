@@ -1,7 +1,10 @@
+"""Train CNN and ResNet sketch classifiers on rasterized QuickDraw inputs."""
+
 from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import json
 import math
 import os
@@ -20,11 +23,12 @@ from sklearn.model_selection import train_test_split
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from cnn_model import QuickDrawCNN, QuickDrawDeepCNN, QuickDrawResNet
+from sketch_cnn_models import QuickDrawCNN, QuickDrawDeepCNN, QuickDrawResNet
 
 
 @dataclass
 class SplitData:
+    """Store the train, validation, and test splits for CNN training."""
     X_train: np.ndarray
     y_train: np.ndarray
     X_val: np.ndarray
@@ -34,6 +38,7 @@ class SplitData:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line options for sketch CNN training and evaluation."""
     parser = argparse.ArgumentParser(description="Train a LeNet-style CNN on QuickDraw raster images.")
     parser.add_argument("--data-dir", default="data/processed", help="Directory containing X_cnn.npy and y_cnn.npy.")
     parser.add_argument("--images", default=None, help="Optional explicit path to X_cnn.npy.")
@@ -143,6 +148,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, and Torch so experiments are repeatable."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -151,6 +157,7 @@ def set_seed(seed: int) -> None:
 
 
 def resolve_device(requested: Optional[str]) -> torch.device:
+    """Choose the best available Torch device unless one is forced."""
     if requested is not None:
         return torch.device(requested)
     if torch.cuda.is_available():
@@ -161,6 +168,7 @@ def resolve_device(requested: Optional[str]) -> torch.device:
 
 
 def load_label_names(path: str, num_classes: int) -> List[str]:
+    """Load label names from disk or fall back to synthetic class labels."""
     if os.path.exists(path):
         with open(path, "r") as f:
             obj = json.load(f)
@@ -172,6 +180,7 @@ def load_label_names(path: str, num_classes: int) -> List[str]:
 
 
 def resolve_conv_channels(model_type: str, channels: List[int]) -> Tuple[int, ...]:
+    """Validate and normalize conv-channel settings for the chosen architecture."""
     conv_channels = tuple(int(c) for c in channels)
     if any(c <= 0 for c in conv_channels):
         raise ValueError(f"--conv-channels must all be positive, got {conv_channels}.")
@@ -209,6 +218,7 @@ def resolve_conv_channels(model_type: str, channels: List[int]) -> Tuple[int, ..
 
 
 def ensure_nchw(images: np.ndarray) -> np.ndarray:
+    """Convert supported image layouts into channel-first NCHW tensors."""
     if images.ndim == 2:
         side = int(math.isqrt(images.shape[1]))
         if side * side != images.shape[1]:
@@ -232,6 +242,7 @@ def ensure_nchw(images: np.ndarray) -> np.ndarray:
 
 
 def normalize_images(images: np.ndarray) -> np.ndarray:
+    """Scale raster inputs into the [0, 1] range expected by the CNNs."""
     max_value = float(images.max()) if images.size > 0 else 1.0
     if max_value > 1.0:
         images = images / 255.0
@@ -239,6 +250,7 @@ def normalize_images(images: np.ndarray) -> np.ndarray:
 
 
 def subset_data(X: np.ndarray, y: np.ndarray, categories: Optional[int], limit: Optional[int]) -> Tuple[np.ndarray, np.ndarray]:
+    """Optionally filter the dataset to a smaller class set or sample cap."""
     if categories is not None:
         if categories <= 0:
             raise ValueError("--categories must be >= 1")
@@ -265,6 +277,7 @@ def stratified_split(
     val_size: float,
     random_seed: int,
 ) -> SplitData:
+    """Create reproducible train, validation, and test splits."""
     if not (0.0 < test_size < 1.0):
         raise ValueError("--test-size must be between 0 and 1.")
     if not (0.0 <= val_size < 1.0):
@@ -300,6 +313,7 @@ def build_loader(
     shuffle: bool,
     num_workers: int,
 ) -> DataLoader:
+    """Build a DataLoader for one split of the sketch image dataset."""
     dataset = TensorDataset(torch.from_numpy(X), torch.from_numpy(y.astype(np.int64, copy=False)))
     return DataLoader(
         dataset,
@@ -311,6 +325,7 @@ def build_loader(
 
 
 def compute_class_weights(labels: np.ndarray, num_classes: int, device: torch.device) -> Tensor:
+    """Compute inverse-frequency class weights for cross-entropy loss."""
     counts = np.bincount(labels, minlength=num_classes).astype(np.float32)
     counts[counts == 0] = 1.0
     weights = counts.sum() / (num_classes * counts)
@@ -398,6 +413,7 @@ def train_one_epoch(
     scale_jitter: float,
     random_erase_prob: float,
 ) -> Dict[str, float]:
+    """Train the model for one epoch and return aggregate training metrics."""
     model.train()
     total_loss = 0.0
     all_preds: List[np.ndarray] = []
@@ -450,6 +466,7 @@ def evaluate(
     criterion: nn.Module,
     device: torch.device,
 ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
+    """Evaluate the model on one split and return metrics plus predictions."""
     model.eval()
     total_loss = 0.0
     all_preds: List[np.ndarray] = []
@@ -484,8 +501,30 @@ def evaluate(
 
 
 def save_json(path: str, obj: Dict[str, Any]) -> None:
+    """Write a JSON artifact with readable indentation."""
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
+
+
+def save_per_class_metrics_csv(path: str, report: Dict[str, Any], label_names: List[str]) -> None:
+    """Write per-class precision, recall, F1, and support to a CSV file."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["label", "precision", "recall", "f1_score", "support"],
+        )
+        writer.writeheader()
+        for label_name in label_names:
+            stats = report.get(label_name, {})
+            writer.writerow(
+                {
+                    "label": label_name,
+                    "precision": float(stats.get("precision", 0.0)),
+                    "recall": float(stats.get("recall", 0.0)),
+                    "f1_score": float(stats.get("f1-score", 0.0)),
+                    "support": int(stats.get("support", 0)),
+                }
+            )
 
 
 def build_top_confusions(cm: np.ndarray, label_names: List[str], *, top_n: int = 10) -> List[Dict[str, Any]]:
@@ -530,6 +569,7 @@ def build_worst_classes(report: Dict[str, Any], label_names: List[str], *, top_n
 
 
 def plot_confusion_matrix(cm: np.ndarray, labels: List[str], out_path: str, *, max_tick_labels: int = 50) -> None:
+    """Render and save a confusion matrix image for the trained CNN."""
     n = cm.shape[0]
     fig_w = min(18, max(6, n * 0.35))
     fig_h = min(18, max(6, n * 0.35))
@@ -553,6 +593,7 @@ def plot_confusion_matrix(cm: np.ndarray, labels: List[str], out_path: str, *, m
 
 
 def plot_training_curves(history: List[Dict[str, float]], out_path: str) -> None:
+    """Plot the train/validation loss and accuracy curves for one run."""
     epochs = [row["epoch"] for row in history]
     train_loss = [row["train_loss"] for row in history]
     val_loss = [row["val_loss"] for row in history]
@@ -586,6 +627,7 @@ def make_checkpoint(
     best_val_metrics: Dict[str, float],
     label_names: List[str],
 ) -> Dict[str, Any]:
+    """Bundle model weights and metadata into a reusable checkpoint payload."""
     return {
         "model_state_dict": model.state_dict(),
         "model_config": {
@@ -604,6 +646,7 @@ def make_checkpoint(
 
 
 def main() -> None:
+    """Run end-to-end CNN training, evaluation, and artifact generation."""
     args = parse_args()
     set_seed(args.random_seed)
 
@@ -885,6 +928,11 @@ def main() -> None:
 
     save_json(os.path.join(args.results_dir, "cnn_metrics.json"), metrics)
     save_json(os.path.join(args.results_dir, "cnn_classification_report.json"), report)
+    save_per_class_metrics_csv(
+        os.path.join(args.results_dir, "cnn_per_class_metrics.csv"),
+        report,
+        label_names,
+    )
     save_json(os.path.join(args.results_dir, "cnn_presentation_summary.json"), presentation_summary)
     save_json(
         os.path.join(args.results_dir, "cnn_history.json"),

@@ -1,150 +1,206 @@
 # CS-4262-Doodling-Project
-We will build a “Pictionary” classifier that guesses the object category of a sketch. The main learning goal is to compare classic course models (logistic regression, SVM, random forests) on engineered stroke features versus a CNN on rasterized sketches and quantify how much the CNN helps. Dataset: https://quickdraw.withgoogle.com/data
 
-## Repo Layout
+**Classname:** CS4262 - Foundations of Machine Learning  
+**Collaborators:** Mohamed Bakry, Simon Gou, Xinran Shi, John Abad, Rojin Sharma
 
-- `scripts/` - executable training, download, and feature-extraction scripts
-- `docs/` - milestone-style notes, runbooks, and experiment documentation
-- `notebooks/` - exploratory and Colab notebooks
-- `data/` - local downloaded/processed data (ignored by git)
-- `results/` - local metrics, checkpoints, and plots (ignored by git)
+## Introduction
 
-## Getting Started (Environment Setup)
+This project builds a sketch-classification system inspired by Pictionary and Google Quick, Draw!. The goal is to predict the object category of a drawing and compare two modeling approaches:
 
-This project uses [uv](https://github.com/astral-sh/uv) to manage dependencies reliably.
+- classical machine learning models trained on engineered stroke features
+- convolutional neural networks trained on rasterized sketch images
 
-1. **Install `uv`** (if you haven't already):
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-2. **Install all dependencies**:
-   ```bash
-   uv sync
-   ```
-   *This single command reads `uv.lock`, creates a `.venv` virtual environment, and identically strictly installs Jupyter, numpy, scikit-learn, PyTorch, etc.*
+The main question behind the project is how much performance we gain by moving from hand-crafted features to learned visual representations.
 
-   `.venv` is intended to be managed by `uv`. Do not create or update it manually with `python -m venv` / `pip install` if you want reproducible results.
+Dataset source: [Google Quick, Draw!](https://quickdraw.withgoogle.com/data)
 
-3. **Run your code**:
-   Prefix commands with `uv run` to automatically run code inside the isolated environment.
-   ```bash
-   uv run jupyter notebook
-   ```
+## Project Structure
 
----
+- `scripts/` contains the main download, preprocessing, and training scripts
+- `docs/` contains runbooks, milestone notes, and experiment documentation
+- `notebooks/` contains Colab and exploratory notebooks
+- `data/` stores downloaded and processed data locally and is not committed
+- `results/` stores checkpoints, metrics, and plots locally and is not committed
 
-## How to download processed data
+## Environment Setup
 
-### Run the download script
+This project uses [uv](https://github.com/astral-sh/uv) for reproducible environment management.
+
+### Install `uv`
+
 ```bash
-# For CNN models (X_cnn.npy, y_cnn.npy — ~521 MB)
-uv run python scripts/download_data.py --role cnn
-
-# For baseline models (strokes.ndjson — ~327 MB)
-uv run python scripts/download_data.py --role baseline
-# If Google Drive download fails with SSL/certificate verification:
-# uv run python scripts/download_data.py --role baseline --no-ssl-verify
-
-# For everything (~848 MB)
-uv run python scripts/download_data.py --role all
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Files will be saved to `data/processed/`.
+### Install dependencies
 
-### 3. Re-downloading
-If the dataset has been updated, simply re-run the script. Already existing files will be skipped automatically. To force a fresh download, delete the files in `data/processed/` first.
-
-> **Note:** The dataset and outputs (large `*.npy`/`*.json` files) are generated locally and should not be committed to the repo.
-
-## Stroke feature engineering + baseline training
-
-The raw download script fetches `data/processed/strokes.ndjson` (and optionally CNN arrays), but it does not build the engineered “stroke feature matrix”.
-Use the provided scripts below:
-
-### Step 1 — Build `X_features.npy` (and labels)
-```bash
-# Full run
-uv run python scripts/extract_features.py
-
-# Quick smoke test
-uv run python scripts/extract_features.py --limit 10000
-```
-
-This reads `data/processed/strokes.ndjson` and writes:
-- `data/processed/X_features.npy` (shape: `N x 18`)
-- `data/processed/y_features.npy` (shape: `N`)
-- `data/processed/label_names.json` (class name per label id)
-- `data/processed/feature_config.json` (feature/dimension config)
-
-### Step 2 — Train baseline classifiers
-```bash
-# Fast test on the first K categories (labels 0..K-1)
-uv run python scripts/train_baseline.py --categories 10
-
-# Full run (690k samples)
-uv run python scripts/train_baseline.py
-```
-
-This trains:
-- Logistic Regression (L2)
-- Logistic Regression (L1, used for sparsity/feature selection reporting)
-- Linear SVM
-
-It saves metrics and confusion matrix plots to `results/`.
-
-## CNN training on rasterized sketches
-
-The repo also includes a PyTorch CNN baseline for the rasterized QuickDraw images (`X_cnn.npy`, `y_cnn.npy`).
-This is meant to support the project comparison between classical engineered-feature models and a learned image model.
-
-### Step 1 - Install PyTorch
-
-If you are running locally:
 ```bash
 uv sync
 ```
 
-If you are running in Google Colab, PyTorch is usually preinstalled already.
+This creates a `uv`-managed `.venv` and installs the locked dependency set from `uv.lock`.
 
-### Step 2 - Train the CNN
+### Run commands
+
+Use `uv run` so commands execute inside the project environment:
+
 ```bash
-# Quick smoke test on 10 categories
-uv run python scripts/train_cnn.py --categories 10 --limit 10000 --epochs 5
+uv run python --version
+```
+
+## How To Run
+
+### 1. Download the data
+
+Use the download script to fetch the processed files needed for either the CNN pipeline, the classical baseline pipeline, or both.
+
+```bash
+# CNN arrays only
+uv run python scripts/download_quickdraw_data.py --role cnn
+
+# Stroke data only
+uv run python scripts/download_quickdraw_data.py --role baseline
+
+# Everything
+uv run python scripts/download_quickdraw_data.py --role all
+```
+
+If Google Drive download fails because of SSL verification on your network:
+
+```bash
+uv run python scripts/download_quickdraw_data.py --role baseline --no-ssl-verify
+```
+
+Downloaded files are stored in `data/processed/`.
+
+### 2. Build engineered stroke features
+
+The classical models do not train directly on `strokes.ndjson`; they use a feature matrix built from the stroke sequences.
+
+```bash
+# Full feature extraction
+uv run python scripts/build_stroke_features.py
+
+# Small smoke test
+uv run python scripts/build_stroke_features.py --limit 10000
+```
+
+This creates:
+
+- `data/processed/X_features.npy`
+- `data/processed/y_features.npy`
+- `data/processed/label_names.json`
+- `data/processed/feature_config.json`
+
+The current feature extractor produces a 26-dimensional feature vector per sketch.
+
+### 3. Train the classical baselines
+
+```bash
+# Quick test on first 10 classes
+uv run python scripts/train_classical_models.py --categories 10
 
 # Full run
-uv run python scripts/train_cnn.py --epochs 15 --batch-size 256
+uv run python scripts/train_classical_models.py
 ```
 
-By default, the script:
-- loads `data/processed/X_cnn.npy` and `data/processed/y_cnn.npy`
-- normalizes images to `[0, 1]`
-- creates stratified train/validation/test splits
-- trains a LeNet-style CNN
-- selects the best checkpoint by validation macro-F1
+The classical pipeline trains:
 
-### Step 3 - Review outputs
+- Logistic Regression (L2)
+- Logistic Regression (L1)
+- Linear SVM
 
-The CNN script writes the following files to `results/`:
-- `cnn_best.pt` - best model checkpoint
-- `cnn_metrics.json` - summary metrics
-- `cnn_classification_report.json` - per-class precision/recall/F1
-- `cnn_confusion_matrix.npy` and `cnn_confusion_matrix.png`
-- `cnn_history.json` - epoch-by-epoch metrics
+Artifacts such as metrics, confusion matrices, and saved pipelines are written locally to `results/` and `models/`.
+
+### 4. Train the CNN pipeline
+
+The CNN pipeline uses rasterized QuickDraw arrays from `X_cnn.npy` and `y_cnn.npy`.
+
+```bash
+# Small smoke test
+uv run python scripts/train_sketch_cnn.py --categories 10 --limit 10000 --epochs 5
+
+# Standard full-data run
+uv run python scripts/train_sketch_cnn.py --epochs 15 --batch-size 256
+```
+
+The CNN trainer supports multiple architectures:
+
+- `lenet`
+- `deep`
+- `resnet`
+
+It also supports:
+
+- class weighting
+- data augmentation
+- learning-rate schedulers
+- top-1, top-3, and top-5 evaluation metrics
+
+Example of a stronger ResNet run:
+
+```bash
+uv run python scripts/train_sketch_cnn.py \
+  --model-type resnet \
+  --augment \
+  --scheduler plateau \
+  --epochs 30 \
+  --batch-size 256 \
+  --learning-rate 5e-4 \
+  --hidden-dim 512 \
+  --conv-channels 64 128 256 \
+  --dropout 0.35
+```
+
+## Outputs
+
+### Classical-model outputs
+
+The classical pipeline writes metrics and confusion matrices to `results/`, and saved model pipelines to `models/`.
+
+### CNN outputs
+
+The CNN pipeline writes these artifacts to `results/`:
+
+- `cnn_best.pt`
+- `cnn_metrics.json`
+- `cnn_classification_report.json`
+- `cnn_per_class_metrics.csv`
+- `cnn_presentation_summary.json`
+- `cnn_history.json`
+- `cnn_confusion_matrix.npy`
+- `cnn_confusion_matrix.png`
 - `cnn_training_curves.png`
 
-Useful knobs for experiments:
-```bash
-uv run python scripts/train_cnn.py \
-  --batch-size 512 \
-  --learning-rate 5e-4 \
-  --dropout 0.4 \
-  --hidden-dim 256 \
-  --conv-channels 32 64 \
-  --class-weighting
-```
+These outputs include:
 
-This makes it easy to run one stable baseline in the repo while trying variants in Colab.
+- top-1, top-3, and top-5 accuracy
+- macro-F1
+- per-class precision, recall, and F1
+- most common confusion pairs
+- weakest classes by F1
+- full experiment configuration
 
-Helpful references:
-- `docs/CNN_COLAB_RUNBOOK.md`
-- `notebooks/cnn_colab_runner.ipynb`
+## Recommended Workflow
+
+For day-to-day work, a good sequence is:
+
+1. Download the needed data.
+2. Run a small smoke test first.
+3. Train the baseline classical models.
+4. Train the CNN or ResNet models.
+5. Compare metrics, confusion matrices, and per-class behavior.
+6. Save the best run artifacts for the report and presentation.
+
+## Colab / Experiment References
+
+- [`docs/CNN_COLAB_RUNBOOK.md`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/docs/CNN_COLAB_RUNBOOK.md)
+- [`notebooks/cnn_colab_runner.ipynb`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/notebooks/cnn_colab_runner.ipynb)
+- [`notebooks/quickdraw_data_download.ipynb`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/notebooks/quickdraw_data_download.ipynb)
+
+## Notes
+
+- Large generated files in `data/` and `results/` should stay out of Git.
+- The raster CNN input file may be stored as flattened `(N, 784)` vectors; the training script reshapes this automatically.
+- If Colab has trouble with workers, rerun with `--num-workers 0`.
+- For reproducibility, prefer `uv sync` and `uv run ...` over a manually managed virtual environment.

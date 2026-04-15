@@ -1,4 +1,5 @@
-# scripts/download_data.py
+"""Download the QuickDraw project datasets needed for baseline and CNN workflows."""
+
 import gdown
 import os
 import argparse
@@ -21,6 +22,7 @@ FILE_IDS = {
 }
 
 def download(role="all", verify=True):
+    """Download the files required for the requested project role."""
     if role not in ROLES:
         print(f"Unknown role. Choose from: {list(ROLES.keys())}")
         return

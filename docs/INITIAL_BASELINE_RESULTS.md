@@ -6,18 +6,18 @@ This file records a small smoke test run so collaborators can quickly see the ba
 
 Feature engineering:
 ```bash
-python scripts/extract_features.py --limit 10000
+python scripts/build_stroke_features.py --limit 10000
 ```
 
 Baseline training:
 ```bash
-python scripts/train_baseline.py --categories 10
+python scripts/train_classical_models.py --categories 10
 ```
 
 Notes / defaults used by the scripts:
-- Only `recognized=true` records are used in `scripts/extract_features.py` (unless `--include-unrecognized` is passed).
-- `scripts/extract_features.py` outputs an 18-dimensional feature vector per sample (10 numeric/geometric features + an 8-bin direction histogram).
-- `scripts/train_baseline.py` uses:
+- Only `recognized=true` records are used in `scripts/build_stroke_features.py` (unless `--include-unrecognized` is passed).
+- `scripts/build_stroke_features.py` outputs a 26-dimensional feature vector per sample.
+- `scripts/train_classical_models.py` uses:
   - `--test-size 0.2` (default)
   - `--random-seed 42` (default)
   - `stratify=y` when possible
@@ -62,4 +62,4 @@ Test set size (after filtering to labels `< 10`): `58` samples across `10` class
 
 ## Where the confusion matrices are saved
 
-When you run `scripts/train_baseline.py`, it writes confusion matrices to the local `results/` directory (PNG + NPY). Those `results/` artifacts are intentionally not committed to the repo.
+When you run `scripts/train_classical_models.py`, it writes confusion matrices to the local `results/` directory (PNG + NPY). Those `results/` artifacts are intentionally not committed to the repo.

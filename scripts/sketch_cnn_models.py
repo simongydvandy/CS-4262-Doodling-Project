@@ -1,3 +1,5 @@
+"""Define CNN architectures for rasterized QuickDraw sketch classification."""
+
 from __future__ import annotations
 
 import math
@@ -10,6 +12,7 @@ class ConvBlock(nn.Module):
     """Conv-BN-ReLU convenience block used by the deeper CNN."""
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
+        """Create a reusable conv-batchnorm-ReLU feature block."""
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
@@ -18,6 +21,7 @@ class ConvBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the convolutional feature block to one tensor batch."""
         return self.block(x)
 
 
@@ -32,6 +36,7 @@ class ResidualBlock(nn.Module):
         stride: int = 1,
         dropout: float = 0.0,
     ) -> None:
+        """Create a residual block with an optional downsampling shortcut."""
         super().__init__()
         self.conv1 = nn.Conv2d(
             in_channels,
@@ -63,6 +68,7 @@ class ResidualBlock(nn.Module):
             self.shortcut = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply two residual convolutions and add the shortcut path."""
         identity = self.shortcut(x)
 
         out = self.conv1(x)
@@ -88,6 +94,7 @@ class QuickDrawCNN(nn.Module):
         hidden_dim: int = 128,
         dropout: float = 0.3,
     ) -> None:
+        """Build the compact LeNet-style baseline sketch classifier."""
         super().__init__()
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}.")
@@ -117,6 +124,7 @@ class QuickDrawCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass through the baseline sketch classifier."""
         x = self.features(x)
         return self.classifier(x)
 
@@ -140,6 +148,7 @@ class QuickDrawDeepCNN(nn.Module):
         hidden_dim: int = 256,
         dropout: float = 0.3,
     ) -> None:
+        """Build the deeper non-residual CNN used as a stronger baseline."""
         super().__init__()
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}.")
@@ -175,6 +184,7 @@ class QuickDrawDeepCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass through the deeper sketch CNN."""
         x = self.features(x)
         return self.classifier(x)
 
@@ -196,6 +206,7 @@ class QuickDrawResNet(nn.Module):
         hidden_dim: int = 512,
         dropout: float = 0.35,
     ) -> None:
+        """Build the ResNet-style sketch classifier with three feature stages."""
         super().__init__()
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}.")
@@ -237,6 +248,7 @@ class QuickDrawResNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass through the ResNet-style sketch classifier."""
         x = self.stem(x)
         x = self.stage1(x)
         x = self.stage2(x)
