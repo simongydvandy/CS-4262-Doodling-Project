@@ -1,7 +1,7 @@
 # CS-4262-Doodling-Project
 
 **Classname:** CS4262 - Foundations of Machine Learning  
-**Collaborators:** Mohamed Bakry, Simon Gou, Xinran Shi, John Abad, Rojin Sharma
+**Collaborators:** Mohamed Bakry, Simon (Yiding) Gou, Xinran (Charlene) Shi, John Abad, Rojin Sharma
 
 ## Introduction
 
