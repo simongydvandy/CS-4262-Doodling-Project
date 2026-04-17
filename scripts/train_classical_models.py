@@ -1,5 +1,3 @@
-"""Train the classical baselines on engineered QuickDraw stroke features."""
-
 import argparse
 import json
 import os
@@ -7,8 +5,6 @@ import threading
 import time
 import warnings
 from typing import Any, Dict, List, Tuple
-
-os.environ.setdefault("MPLCONFIGDIR", os.path.join("/tmp", "matplotlib"))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,7 +26,6 @@ import joblib
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _load_label_names(path: str) -> List[str]:
-    """Load label names from the saved processed-data metadata file."""
     with open(path, "r") as f:
         obj = json.load(f)
     if isinstance(obj, list):
@@ -41,7 +36,6 @@ def _load_label_names(path: str) -> List[str]:
 
 
 def _save_json(path: str, obj: Dict[str, Any]) -> None:
-    """Write a small JSON artifact to disk with stable formatting."""
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
 
@@ -53,7 +47,6 @@ def _plot_confusion_matrix(
     *,
     max_tick_labels: int = 50,
 ) -> None:
-    """Render and save a confusion matrix image for one trained classifier."""
     n = cm.shape[0]
     fig_w = min(18, max(6, n * 0.35))
     fig_h = min(18, max(6, n * 0.35))
@@ -102,7 +95,6 @@ def evaluate_and_save(
     label_names: List[str],
     results_dir: str,
 ) -> Tuple[Dict[str, Any], np.ndarray, Any]:
-    """Fit one baseline model, evaluate it, and save its artifacts."""
     print(f"\nTraining {model_name}...")
     t0 = time.time()
 
@@ -146,6 +138,7 @@ def evaluate_and_save(
     print(f"  Accuracy : {acc:.4f}")
     print(f"  Macro-F1 : {f1:.4f}")
 
+    clf_params = model.named_steps["clf"].get_params()
     metrics = {
         "model":            model_name,
         "accuracy":         acc,
@@ -153,6 +146,8 @@ def evaluate_and_save(
         "num_classes":      int(len(label_names)),
         "num_test_samples": int(len(y_test)),
         "train_time_sec":   round(elapsed, 2),
+        "C":                float(clf_params.get("C", float("nan"))),
+        "class_weight":     str(clf_params.get("class_weight", "none")),
     }
 
     metrics_path = os.path.join(results_dir, f"{model_name}_metrics.json")
@@ -189,7 +184,7 @@ def l1_sparsity_report(
 ) -> Dict[str, Any]:
     """
     Summarize L1 sparsity. coef shape: (n_classes, n_features).
-    Covers all 26 features from the updated build_stroke_features.py.
+    Covers all 26 features from the updated extract_features.py.
     A feature is considered selected if any class has a nonzero coefficient for it.
     """
     nonzero = np.abs(coef) > eps
@@ -209,7 +204,6 @@ def l1_sparsity_report(
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Run the full classical-model training pipeline and save summaries."""
     parser = argparse.ArgumentParser(
         description="Train baseline models on X_features.npy."
     )
@@ -230,6 +224,16 @@ def main() -> None:
     )
     parser.add_argument("--test-size",   type=float, default=0.2)
     parser.add_argument("--random-seed", type=int,   default=42)
+    parser.add_argument(
+        "--C",
+        type=float,
+        default=1.0,
+        help=(
+            "Inverse regularization strength for LR and LinearSVC (default: 1.0). "
+            "Smaller values = stronger regularization. Use --results-dir to keep "
+            "each run isolated when comparing C values across teammates."
+        ),
+    )
     parser.add_argument(
         "--results-dir",
         default="results",
@@ -281,7 +285,7 @@ def main() -> None:
         raise ValueError(
             f"feature_config.json has {len(feature_names)} feature names "
             f"but X_features.npy has {X.shape[1]} columns. "
-            f"Re-run build_stroke_features.py to regenerate feature_config.json."
+            f"Re-run extract_features.py to regenerate feature_config.json."
         )
 
     # stratified split
@@ -301,14 +305,16 @@ def main() -> None:
         )
     print(f"  Train: {X_train.shape}   Test: {X_test.shape}")
 
+    print(f"\nUsing C={args.C}  (class_weight='balanced' enabled for all models)")
+
     # ── model 1: LR L2 ────────────────────────────────────────────────
     lr_l2 = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
-            penalty="l2",
-            solver="lbfgs",
-            max_iter=5000,
-            n_jobs=-1,
+            solver="lbfgs",     # penalty='l2' removed — L2 is now the default in sklearn 1.8+
+            max_iter=5000,      # n_jobs removed — has no effect since sklearn 1.8
+            C=args.C,
+            class_weight="balanced",
         )),
     ])
     metrics_lr_l2, _, fitted_lr_l2 = evaluate_and_save(
@@ -324,12 +330,12 @@ def main() -> None:
     lr_l1 = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
-            penalty="l1",
-            solver="saga",
+            solver="saga",      # penalty='l1' replaced by l1_ratio=1 (pure L1) in sklearn 1.8+
+            l1_ratio=1,         # n_jobs removed — has no effect since sklearn 1.8
             max_iter=5000,
-            n_jobs=-1,
             tol=1e-3,
-            C=1.0,
+            C=args.C,
+            class_weight="balanced",
         )),
     ])
     metrics_lr_l1, _, fitted_lr_l1 = evaluate_and_save(
@@ -355,6 +361,8 @@ def main() -> None:
         ("clf", LinearSVC(
             random_state=args.random_seed,
             max_iter=20000,
+            C=args.C,
+            class_weight="balanced",
         )),
     ])
     metrics_svm, _, fitted_svm = evaluate_and_save(

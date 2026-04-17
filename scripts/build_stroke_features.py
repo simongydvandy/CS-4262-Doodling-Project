@@ -1,5 +1,3 @@
-"""Build engineered stroke features from the QuickDraw NDJSON export."""
-
 import argparse
 import json
 import math
@@ -10,26 +8,26 @@ import numpy as np
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
-FEATURE_DIM = 26
+FEATURE_DIM = 24
 
 FEATURE_NAMES = [
     # Family 1 — Counting (4)
     "num_strokes",
     "num_points",
     "avg_points_per_stroke",
-    "max_stroke_len",
+    "max_points_per_stroke",        # renamed from max_stroke_len (was misleading — counts points, not spatial length)
     # Family 2 — Geometry (6)
     "bbox_width",
     "bbox_height",
     "bbox_aspect_ratio",
-    "bbox_area",
-    "centroid_x",
-    "centroid_y",
+    "log_bbox_area",                # was bbox_area; log1p applied to compress 6-order-of-magnitude range
+    "centroid_x_norm",              # was centroid_x (absolute canvas coords); now normalized to [0,1] within bbox
+    "centroid_y_norm",              # was centroid_y (absolute canvas coords); now normalized to [0,1] within bbox
     # Family 3 — Ink (3)
     "ink_length_total",
     "ink_length_mean_segment",
     "ink_length_norm_diag",
-    # Family 4 — Direction (10)
+    # Family 4 — Direction (8 bins + entropy; dominant_direction removed — circular index was mis-encoded as continuous)
     "dir_hist_bin_0",
     "dir_hist_bin_1",
     "dir_hist_bin_2",
@@ -38,13 +36,12 @@ FEATURE_NAMES = [
     "dir_hist_bin_5",
     "dir_hist_bin_6",
     "dir_hist_bin_7",
-    "dominant_direction",
     "direction_entropy",
     # Family 5 — Curvature (2)
-    "corners_count",
+    "corners_per_stroke",           # was corners_count (raw); now corners_count / num_strokes — more meaningful
     "corners_density",
-    # Meta (1)
-    "recognized",
+    # NOTE: 'recognized' removed — default pipeline filters to recognized=True only, making this constant (always 1.0)
+    # NOTE: 'dominant_direction' removed — argmax index 0–7 is circular (bin 7 ≈ bin 0) but was treated as continuous
 ]
 
 assert len(FEATURE_NAMES) == FEATURE_DIM
@@ -105,13 +102,12 @@ def _count_corners(
 
 def compute_stroke_features(
     drawing: List,
-    recognized: bool = True,
     direction_bins: int = 8,
     corner_angle_deg: float = 30.0,
     eps: float = 1e-8,
 ) -> np.ndarray:
     """
-    Compute a 26-dim feature vector from a QuickDraw simplified stroke drawing.
+    Compute a 24-dim feature vector from a QuickDraw simplified stroke drawing.
 
     The drawing format expected is the simplified ndjson format:
         drawing = [
@@ -120,37 +116,34 @@ def compute_stroke_features(
             ...
         ]
 
-    Features (26):
+    Features (24):
         Family 1 — Counting (4):
             0  num_strokes
             1  num_points
             2  avg_points_per_stroke
-            3  max_stroke_len
+            3  max_points_per_stroke       (renamed from max_stroke_len)
 
         Family 2 — Geometry (6):
             4  bbox_width
             5  bbox_height
             6  bbox_aspect_ratio
-            7  bbox_area
-            8  centroid_x
-            9  centroid_y
+            7  log_bbox_area               (log1p of bbox_area; was bbox_area — huge range compressed)
+            8  centroid_x_norm             (was centroid_x; now (centroid_x - minx) / bbox_width ∈ [0,1])
+            9  centroid_y_norm             (was centroid_y; now (centroid_y - miny) / bbox_height ∈ [0,1])
 
         Family 3 — Ink (3):
             10  ink_length_total
             11  ink_length_mean_segment
             12  ink_length_norm_diag
 
-        Family 4 — Direction (10):
+        Family 4 — Direction (9):
             13-20  dir_hist_bin_0..7
-            21     dominant_direction
-            22     direction_entropy
+            21     direction_entropy
+            (dominant_direction removed — circular argmax index was mis-encoded as a continuous feature)
 
         Family 5 — Curvature (2):
-            23  corners_count
-            24  corners_density
-
-        Meta (1):
-            25  recognized
+            22  corners_per_stroke         (was corners_count; now corners_count / num_strokes)
+            23  corners_density
     """
     corner_threshold = corner_angle_deg * math.pi / 180.0
 
@@ -199,10 +192,10 @@ def compute_stroke_features(
         return np.zeros(FEATURE_DIM, dtype=np.float32)
 
     # ── family 1: counting ─────────────────────────────────────────────
-    num_strokes           = len(stroke_point_counts)
-    num_points            = total_points
-    avg_points_per_stroke = float(num_points) / (num_strokes + eps)
-    max_stroke_len        = float(max(stroke_point_counts))
+    num_strokes              = len(stroke_point_counts)
+    num_points               = total_points
+    avg_points_per_stroke    = float(num_points) / (num_strokes + eps)
+    max_points_per_stroke    = float(max(stroke_point_counts))  # renamed from max_stroke_len
 
     # ── family 2: geometry ─────────────────────────────────────────────
     minx, maxx   = min(all_x), max(all_x)
@@ -210,9 +203,13 @@ def compute_stroke_features(
     bbox_width   = float(maxx - minx)
     bbox_height  = float(maxy - miny)
     bbox_aspect  = bbox_width / (bbox_height + eps)
-    bbox_area    = bbox_width * bbox_height
-    centroid_x   = float(sum(all_x) / len(all_x))
-    centroid_y   = float(sum(all_y) / len(all_y))
+    # log1p compresses the 6-order-of-magnitude range of bbox_area so outliers don't dominate after StandardScaler
+    log_bbox_area = math.log1p(bbox_width * bbox_height)
+    raw_cx        = float(sum(all_x) / len(all_x))
+    raw_cy        = float(sum(all_y) / len(all_y))
+    # Normalize centroid to [0,1] within the bounding box so position encodes shape, not canvas location
+    centroid_x_norm = (raw_cx - minx) / (bbox_width  + eps)
+    centroid_y_norm = (raw_cy - miny) / (bbox_height + eps)
 
     # ── family 3: ink ──────────────────────────────────────────────────
     ink_total        = float(sum(segment_lengths)) if segment_lengths else 0.0
@@ -222,16 +219,17 @@ def compute_stroke_features(
     ink_norm_diag    = ink_total / (bbox_diag + eps)
 
     # ── family 4: direction ────────────────────────────────────────────
-    hist          = _direction_histogram(angles, bins=direction_bins)
-    dominant_dir  = float(np.argmax(hist))
-    entropy       = float(-np.sum(hist * np.log(hist + eps)))
+    hist    = _direction_histogram(angles, bins=direction_bins)
+    # dominant_direction (argmax index) removed: bins 0–7 represent circular angles, so the
+    # index is NOT a continuous value (bin 7 ≈ bin 0). The 8 histogram bins already carry
+    # this information without the encoding bug.
+    entropy = float(-np.sum(hist * np.log(hist + eps)))
 
     # ── family 5: curvature ────────────────────────────────────────────
-    corners_count   = float(total_corners)
-    corners_density = corners_count / float(max(total_points - 2, 1))
-
-    # ── meta ───────────────────────────────────────────────────────────
-    recognized_flag = float(recognized)
+    # corners_per_stroke normalizes by num_strokes so complex drawings with many strokes
+    # aren't unfairly penalized vs. simple single-stroke drawings
+    corners_per_stroke = float(total_corners) / float(num_strokes + eps)
+    corners_density    = float(total_corners) / float(max(total_points - 2, 1))
 
     # ── assemble feature vector ────────────────────────────────────────
     feats = np.array([
@@ -239,27 +237,25 @@ def compute_stroke_features(
         float(num_strokes),
         float(num_points),
         float(avg_points_per_stroke),
-        float(max_stroke_len),
+        float(max_points_per_stroke),
         # family 2 — geometry
         float(bbox_width),
         float(bbox_height),
         float(bbox_aspect),
-        float(bbox_area),
-        float(centroid_x),
-        float(centroid_y),
+        float(log_bbox_area),
+        float(centroid_x_norm),
+        float(centroid_y_norm),
         # family 3 — ink
         float(ink_total),
         float(ink_mean),
         float(ink_norm_diag),
-        # family 4 — direction histogram + summary stats
+        # family 4 — direction histogram + entropy (dominant_direction removed)
         *hist.tolist(),
-        float(dominant_dir),
         float(entropy),
         # family 5 — curvature
-        float(corners_count),
+        float(corners_per_stroke),
         float(corners_density),
-        # meta
-        float(recognized_flag),
+        # 'recognized' removed — always 1.0 when using default filter, so zero-variance after scaling
     ], dtype=np.float32)
 
     assert feats.shape == (FEATURE_DIM,), f"Expected {FEATURE_DIM} features, got {feats.shape}"
@@ -314,7 +310,6 @@ def load_features(
 
             X[processed] = compute_stroke_features(
                 rec.get("drawing", []),
-                recognized=recognized,
                 direction_bins=direction_bins,
                 corner_angle_deg=corner_angle_deg,
             )
@@ -355,7 +350,6 @@ def load_features(
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    """Extract feature arrays and save them into the processed data directory."""
     parser = argparse.ArgumentParser(
         description="Extract 26 stroke features from strokes.ndjson."
     )

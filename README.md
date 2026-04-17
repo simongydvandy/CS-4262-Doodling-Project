@@ -92,7 +92,7 @@ This creates:
 - `data/processed/label_names.json`
 - `data/processed/feature_config.json`
 
-The current feature extractor produces a 26-dimensional feature vector per sketch.
+The current feature extractor produces a 24-dimensional feature vector per sketch.
 
 ### 3. Train the classical baselines
 
@@ -111,6 +111,35 @@ The classical pipeline trains:
 - Linear SVM
 
 Artifacts such as metrics, confusion matrices, and saved pipelines are written locally to `results/` and `models/`.
+
+#### Distributed C-tuning (team parallel search)
+
+`C` controls inverse regularization strength (`C=1.0` default). Rather than running an expensive grid search on one machine, each teammate runs one value and the team compares the resulting `*_metrics.json` files. Each run takes roughly 1–2 hours on a laptop.
+
+**Prerequisites:** everyone needs the same `X_features.npy` / `y_features.npy` — either run `build_stroke_features.py` locally or share the files. The `--results-dir` flag keeps each run's outputs isolated so nothing is overwritten.
+
+```bash
+# Teammate 1
+uv run python scripts/train_classical_models.py --C 0.01 --results-dir results/C_0.01
+
+# Teammate 2
+uv run python scripts/train_classical_models.py --C 0.1  --results-dir results/C_0.1
+
+# Teammate 3  (current default — reuse existing results if already run)
+uv run python scripts/train_classical_models.py --C 1.0  --results-dir results/C_1.0
+
+# Teammate 4
+uv run python scripts/train_classical_models.py --C 10   --results-dir results/C_10
+
+# Teammate 5
+uv run python scripts/train_classical_models.py --C 100  --results-dir results/C_100
+```
+
+Share the three small `*_metrics.json` files from each run, pick the C with the highest `macro_f1`, then do one final run with that C:
+
+```bash
+uv run python scripts/train_classical_models.py --C <best_C>
+```
 
 ### 4. Train the CNN pipeline
 
@@ -194,9 +223,9 @@ For day-to-day work, a good sequence is:
 
 ## Colab / Experiment References
 
-- [`docs/CNN_COLAB_RUNBOOK.md`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/docs/CNN_COLAB_RUNBOOK.md)
-- [`notebooks/cnn_colab_runner.ipynb`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/notebooks/cnn_colab_runner.ipynb)
-- [`notebooks/quickdraw_data_download.ipynb`](/Users/bakry/Classes/CS4262/CS-4262-Doodling-Project/notebooks/quickdraw_data_download.ipynb)
+- [`docs/CNN_COLAB_RUNBOOK.md`](docs/CNN_COLAB_RUNBOOK.md)
+- [`notebooks/cnn_colab_runner.ipynb`](notebooks/cnn_colab_runner.ipynb)
+- [`notebooks/quickdraw_data_download.ipynb`](notebooks/quickdraw_data_download.ipynb)
 
 ## Notes
 

@@ -1,65 +1,56 @@
-# Initial Baseline Results (sanity check)
+# Classical Baseline Results
 
-This file records a small smoke test run so collaborators can quickly see the baseline performance before the full 690k-sample training.
+This file records the smoke test sanity check and the best full-run results for the classical baseline models (24-feature vector, C=10, class_weight='balanced').
 
-## How the run was produced
+---
 
-Feature engineering:
+## Smoke Test (10 categories)
+
+A quick sanity check on the first 10 categories before committing to the full 690K-sample run.
+
 ```bash
-python scripts/build_stroke_features.py --limit 10000
+uv run python scripts/build_stroke_features.py --limit 10000
+uv run python scripts/train_classical_models.py --C 10 --categories 10
 ```
 
-Baseline training:
+Test set: 3,603 samples across 10 classes.
+
+| Model | Accuracy | Macro-F1 |
+|-------|----------|----------|
+| lr_l2 | **0.7485** | **0.7458** |
+| lr_l1 | 0.7386 | 0.7354 |
+| svm_linear | 0.7277 | 0.7195 |
+
+L1 sparsity: 24 / 24 features selected (all features carry signal).
+
+---
+
+## Full Run (345 categories)
+
+Two C values were tested across teammates. Test set: 126,590 samples across 345 classes.
+
 ```bash
-python scripts/train_classical_models.py --categories 10
+uv run python scripts/build_stroke_features.py
+uv run python scripts/train_classical_models.py --C 10  --results-dir results/C_10
+uv run python scripts/train_classical_models.py --C 100 --results-dir results/C_100
 ```
 
-Notes / defaults used by the scripts:
-- Only `recognized=true` records are used in `scripts/build_stroke_features.py` (unless `--include-unrecognized` is passed).
-- `scripts/build_stroke_features.py` outputs a 26-dimensional feature vector per sample.
-- `scripts/train_classical_models.py` uses:
-  - `--test-size 0.2` (default)
-  - `--random-seed 42` (default)
-  - `stratify=y` when possible
+| Model | C=10 Acc | C=10 F1 | C=100 Acc | C=100 F1 |
+|-------|----------|---------|-----------|----------|
+| lr_l2 | **0.2477** | **0.2248** | 0.2477 | 0.2249 |
+| lr_l1 | 0.2084 | 0.1716 | 0.2085 | 0.1718 |
+| svm_linear | 0.1872 | 0.1260 | 0.1872 | 0.1260 |
 
-## Metrics (10 categories)
+**Best model: LR L2** — 0.2477 accuracy, 0.2248 macro-F1 at both C=10 and C=100.
 
-Test set size (after filtering to labels `< 10`): `58` samples across `10` classes.
+C=10 and C=100 produce virtually identical results, meaning LR L2 has plateaued and further relaxing regularization provides no benefit. C=10 is the recommended value.
 
-- `lr_l2`
-  - accuracy: `0.603448275862069`
-  - macro_f1: `0.5927738927738928`
-- `lr_l1` (L1 sparsity / feature selection reporting)
-  - accuracy: `0.6206896551724138`
-  - macro_f1: `0.6056654456654458`
-- `svm_linear` (linear SVM)
-  - accuracy: `0.603448275862069`
-  - macro_f1: `0.5829109779109778`
+Random baseline on 345 classes = 1/345 = 0.29%. LR L2 is ~85× better than random.
 
-## L1 sparsity report (from `lr_l1`)
+The ~25% ceiling is expected for linear models on 24 hand-engineered stroke features across 345 categories. Many QuickDraw categories share similar global stroke statistics and cannot be separated by a linear boundary in this feature space. Higher accuracy requires a non-linear model such as the CNN.
 
-- Non-zero threshold (`eps`): `1e-06`
-- Selected features: `18 / 18` (all features had non-zero coefficients above the threshold)
-- Selected feature names:
-  - `ink_length_total`
-  - `ink_length_mean_segment`
-  - `num_strokes`
-  - `num_points`
-  - `bbox_width`
-  - `bbox_height`
-  - `bbox_aspect_ratio`
-  - `ink_length_norm_diag`
-  - `corners_count`
-  - `corners_density`
-  - `dir_hist_bin_0`
-  - `dir_hist_bin_1`
-  - `dir_hist_bin_2`
-  - `dir_hist_bin_3`
-  - `dir_hist_bin_4`
-  - `dir_hist_bin_5`
-  - `dir_hist_bin_6`
-  - `dir_hist_bin_7`
+---
 
 ## Where the confusion matrices are saved
 
-When you run `scripts/train_classical_models.py`, it writes confusion matrices to the local `results/` directory (PNG + NPY). Those `results/` artifacts are intentionally not committed to the repo.
+Running `scripts/train_classical_models.py` writes confusion matrices to the local `results/` directory (PNG + NPY). Those artifacts are intentionally not committed to the repo.
